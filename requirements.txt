@@ -6,3 +6,4 @@ google-auth
 statsmodels
 scikit-learn
 plotly
+xlsxwriter

@@ -12,30 +12,31 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. CẤU HÌNH TRANG & CSS DARK MODE (Tối ưu bo tròn & Màu sắc)
+# 1. CẤU HÌNH TRANG & CSS LIGHT MODE (Màu sáng, Bo tròn, Đổ bóng)
 # ==========================================
 st.set_page_config(page_title="VMP Digital Strategy Dashboard", page_icon="📈", layout="wide")
 
 st.markdown("""
     <style>
-    /* Nền tối và font chữ */
-    .stApp { background-color: #0f172a; color: #f8fafc; }
+    /* Nền sáng toàn trang */
+    .stApp { background-color: #f8fafc; color: #1e293b; }
     
-    /* Tùy chỉnh Sidebar */
-    [data-testid="stSidebar"] { background-color: #1e293b; border-right: 1px solid #334155; }
+    /* Sidebar màu trắng sạch sẽ */
+    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e2e8f0; }
     
-    /* Thẻ Card bo tròn */
+    /* Thẻ Card trắng, bo tròn và đổ bóng nhẹ */
     .custom-card {
-        background-color: #1e293b;
-        border-radius: 12px;
-        padding: 20px;
-        border: 1px solid #334155;
+        background-color: #ffffff;
+        border-radius: 16px;
+        padding: 24px;
+        border: 1px solid #e2e8f0;
         margin-bottom: 15px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     }
     
-    /* Thanh tiến độ tùy chỉnh */
+    /* Thanh tiến độ (Light theme) */
     .progress-container {
-        background-color: #334155;
+        background-color: #f1f5f9;
         border-radius: 10px;
         height: 8px;
         width: 100%;
@@ -45,17 +46,17 @@ st.markdown("""
     .progress-bar-fill { height: 100%; border-radius: 10px; }
     
     /* Màu sắc trạng thái */
-    .status-success { background-color: #10b981; } /* Xanh */
+    .status-success { background-color: #10b981; } /* Xanh lá */
     .status-fail { background-color: #ef4444; }    /* Đỏ */
     
-    /* Làm đẹp các Tab */
-    .stTabs [data-baseweb="tab-list"] { background-color: #1e293b; border-radius: 10px; padding: 5px; }
-    .stTabs [aria-selected="true"] { background-color: #38bdf8 !important; color: white !important; border-radius: 8px; }
+    /* Làm đẹp Tab */
+    .stTabs [data-baseweb="tab-list"] { background-color: #f1f5f9; border-radius: 12px; padding: 4px; }
+    .stTabs [aria-selected="true"] { background-color: #ffffff !important; color: #0ea5e9 !important; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. HÀM KẾT NỐI DỮ LIỆU (Giữ nguyên từ code của bạn)
+# 2. HÀM KẾT NỐI DỮ LIỆU (Giữ nguyên logic)
 # ==========================================
 def get_ss_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets']
@@ -106,30 +107,15 @@ def calculate_goals(df):
             mad_lr = np.mean(np.abs(lr_pred - y))
         except:
             lr_pred, mad_lr = ma_pred, 9999
-        models = [{'name': 'Trung bình động (MA)', 'pred': ma_pred, 'mad': mad_ma},
-                  {'name': 'San bằng hàm mũ (ES)', 'pred': es_pred, 'mad': mad_es},
-                  {'name': 'Hồi quy tuyến tính (LR)', 'pred': lr_pred, 'mad': mad_lr}]
-        best = min(models, key=lambda x: x['mad'])
+        best = min([{'name': 'MA', 'pred': ma_pred, 'mad': mad_ma}, {'name': 'ES', 'pred': es_pred, 'mad': mad_es}, {'name': 'LR', 'pred': lr_pred, 'mad': mad_lr}], key=lambda x: x['mad'])
         target_2026 = [int(max(p * 1.1, a * 1.15, 10)) for p, a in zip(best['pred'], y)]
         weekly_actual = {m: {w: 0 for w in range(1, 5)} for m in range(1, 13)}
         df_2026 = df_g[df_g['Year'] == 2026]
         for m in range(1, 13):
             month_data = df_2026[df_2026['Month'] == m].groupby('Week_in_Month').size().to_dict()
-            for w, val in month_data.items():
-                weekly_actual[m][w] = val
-        goals_data[group] = {
-            'method': best['name'], 'mad': round(best['mad'], 2),
-            'monthly': [{'month': m, 'actual_2025': int(y[m-1]), 'target_2026': target_2026[m-1], 'actual_2026': int(actual_2026[m-1])} for m in range(1, 13)],
-            'weekly_actual': weekly_actual
-        }
+            for w, val in month_data.items(): weekly_actual[m][w] = val
+        goals_data[group] = {'method': best['name'], 'monthly': [{'month': m, 'actual_2025': int(y[m-1]), 'target_2026': target_2026[m-1], 'actual_2026': int(actual_2026[m-1])} for m in range(1, 13)], 'weekly_actual': weekly_actual}
     return goals_data
-
-def get_growth_str(curr, prev):
-    if prev == 0: return "▲ 100%" if curr > 0 else "0%"
-    pct = ((curr - prev) / prev) * 100
-    color = "#10b981" if pct >= 0 else "#ef4444"
-    icon = "▲" if pct >= 0 else "▼"
-    return f'<span style="color: {color};">{icon} {abs(round(pct))}% vs kỳ trước</span>'
 
 try:
     df_main = load_data()
@@ -138,60 +124,58 @@ except Exception as e:
     st.error(f"Lỗi: {e}"); st.stop()
 
 # ==========================================
-# 3. SIDEBAR (Giữ nguyên thanh chỉnh ngày)
+# 3. SIDEBAR (Bộ lọc & Menu)
 # ==========================================
 with st.sidebar:
     st.title("VMP Digital")
-    nav = st.radio("Điều hướng", ["📊 Tổng quan Overview", "🎯 Thiết lập Mục tiêu", "📂 Hành trình Data"])
+    nav = st.sidebar.radio("Điều hướng", ["📊 Tổng quan Overview", "🎯 Thiết lập Mục tiêu", "📂 Hành trình Data"])
     st.markdown("---")
-    st.header("Lọc dữ liệu (Tổng quan)")
+    st.header("Lọc dữ liệu")
     start_date = st.date_input("Từ ngày", df_main['Day submit'].min())
     end_date = st.date_input("Đến ngày", df_main['Day submit'].max())
     
-    # Logic lọc
     start_dt, end_dt = pd.to_datetime(start_date), pd.to_datetime(end_date)
     df = df_main[(df_main['Day submit'] >= start_dt) & (df_main['Day submit'] <= end_dt)]
-    df_prev = df_main[(df_main['Day submit'] >= start_dt - pd.Timedelta(days=(end_dt-start_dt).days+1)) & 
-                      (df_main['Day submit'] <= start_dt - pd.Timedelta(days=1))]
+    df_prev = df_main[(df_main['Day submit'] >= start_dt - pd.Timedelta(days=(end_dt-start_dt).days+1)) & (df_main['Day submit'] <= start_dt - pd.Timedelta(days=1))]
 
 # ==========================================
-# 4. GIAO DIỆN HIỂN THỊ
+# 4. GIAO DIỆN CHÍNH
 # ==========================================
 if nav == "📊 Tổng quan Overview":
     st.title("📊 Tổng quan Overview")
     
-    # Tính toán Metrics
     c1, c2, c3 = st.columns(3)
+    # Xác định Target T4 từ logic tính toán (giả sử tháng 4 là index 3)
+    curr_month = datetime.datetime.now().month
+    targets_map = {"Tổng": goals['Tổng hợp']['monthly'][curr_month-1]['target_2026'], "Ebook": 10, "Event": 182}
+    
     metrics = [
-        {"label": "TỔNG SL DATA", "curr": len(df), "prev": len(df_prev), "tgt": goals['Tổng hợp']['monthly'][datetime.datetime.now().month-1]['target_2026']},
-        {"label": "DATA EBOOK", "curr": len(df[df['Nhóm Form'].str.contains('Ebook', na=False, case=False)]), 
-         "prev": len(df_prev[df_prev['Nhóm Form'].str.contains('Ebook', na=False, case=False)]), "tgt": 10},
-        {"label": "DATA EVENT", "curr": len(df[df['Nhóm Form'].str.contains('Event', na=False, case=False)]), 
-         "prev": len(df_prev[df_prev['Nhóm Form'].str.contains('Event', na=False, case=False)]), "tgt": 182}
+        {"label": "TỔNG SL DATA", "curr": len(df), "tgt": targets_map["Tổng"]},
+        {"label": "DATA EBOOK", "curr": len(df[df['Nhóm Form'].str.contains('Ebook', na=False, case=False)]), "tgt": targets_map["Ebook"]},
+        {"label": "DATA EVENT", "curr": len(df[df['Nhóm Form'].str.contains('Event', na=False, case=False)]), "tgt": targets_map["Event"]}
     ]
     
     cols = [c1, c2, c3]
     for i, m in enumerate(metrics):
         ratio = min(m['curr'] / m['tgt'], 1.0) if m['tgt'] > 0 else 0
+        color_hex = "#10b981" if m['curr'] >= m['tgt'] else "#ef4444"
         color_class = "status-success" if m['curr'] >= m['tgt'] else "status-fail"
         cols[i].markdown(f"""
             <div class="custom-card">
-                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: #94a3b8;">
-                    <b>{m['label']}</b> {get_growth_str(m['curr'], m['prev'])}
-                </div>
-                <div style="font-size: 2.2rem; font-weight: bold; margin: 10px 0;">{m['curr']}</div>
-                <div style="font-size: 0.8rem; font-weight: bold; color: {'#10b981' if m['curr']>=m['tgt'] else '#ef4444'};">
+                <div style="font-size: 0.8rem; font-weight: bold; color: #64748b; margin-bottom: 8px;">{m['label']}</div>
+                <div style="font-size: 2.5rem; font-weight: bold; color: #1e293b;">{m['curr']}</div>
+                <div style="font-size: 0.9rem; font-weight: bold; color: {color_hex}; margin-bottom: 4px;">
                     {round(m['curr']/m['tgt']*100, 1) if m['tgt'] > 0 else 0}%
                 </div>
                 <div class="progress-container"><div class="progress-bar-fill {color_class}" style="width: {ratio*100}%;"></div></div>
-                <div style="text-align: right; font-size: 0.7rem; color: #64748b; margin-top: 5px;">Mục tiêu T4: {m['tgt']} Data</div>
+                <div style="text-align: right; font-size: 0.75rem; color: #94a3b8; margin-top: 8px;">Mục tiêu T{curr_month}: {m['tgt']} Data</div>
             </div>
             """, unsafe_allow_html=True)
 
     st.markdown("### Biểu đồ Xu hướng")
     df_trend = df.copy(); df_trend['Ngày'] = df_trend['Day submit'].dt.date
     trend_data = df_trend.groupby(['Ngày', 'Nhóm Form']).size().reset_index(name='Số lượng')
-    fig = px.line(trend_data, x='Ngày', y='Số lượng', color='Nhóm Form', markers=True, template="plotly_dark")
+    fig = px.line(trend_data, x='Ngày', y='Số lượng', color='Nhóm Form', markers=True, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
 elif nav == "🎯 Thiết lập Mục tiêu":
@@ -202,19 +186,18 @@ elif nav == "🎯 Thiết lập Mục tiêu":
     for i, tab in enumerate(tabs):
         with tab:
             g_data = goals[group_map[i]]
-            st.markdown(f'<div style="background-color: #1e293b; padding: 10px; border-radius: 8px; color: #fbbf24; font-size: 0.85rem;">💡 Phương pháp: {g_data["method"]}</div>', unsafe_allow_html=True)
+            st.info(f"💡 Phương pháp dự báo: **{g_data['method']}**")
             
-            st.subheader("Bảng 1: Theo dõi Mục tiêu 2026 theo Tháng")
-            # Hiển thị bảng kèm Progress Bar thủ công
+            # Header bảng
             h1, h2, h3, h4, h5 = st.columns([1.5, 2, 2, 2, 3])
-            h1.write("**Tháng**"); h2.write("**Thực đạt 2025**"); h3.write("**Mục tiêu 2026**"); h4.write("**Thực đạt 2026**"); h5.write("**Tỷ lệ đạt (%)**")
-            st.markdown("---")
+            h1.write("**Tháng**"); h2.write("**2025**"); h3.write("**Mục tiêu 2026**"); h4.write("**Thực đạt 2026**"); h5.write("**Tiến độ (%)**")
+            st.divider()
             
             for m in g_data['monthly']:
                 c1, c2, c3, c4, c5 = st.columns([1.5, 2, 2, 2, 3])
                 c1.write(f"Tháng {m['month']}")
                 c2.write(str(m['actual_2025']))
-                c3.markdown(f"<span style='color: #fbbf24; font-weight: bold;'>{m['target_2026']}</span>", unsafe_allow_html=True)
+                c3.markdown(f"<span style='color: #0ea5e9; font-weight: bold;'>{m['target_2026']}</span>", unsafe_allow_html=True)
                 
                 status_color = "#10b981" if m['actual_2026'] >= m['target_2026'] else "#ef4444"
                 c4.markdown(f"<span style='color: {status_color}; font-weight: bold;'>{m['actual_2026']}</span>", unsafe_allow_html=True)
@@ -222,7 +205,7 @@ elif nav == "🎯 Thiết lập Mục tiêu":
                 ratio = min(m['actual_2026'] / m['target_2026'], 1.0) if m['target_2026'] > 0 else 0
                 color_class = "status-success" if m['actual_2026'] >= m['target_2026'] else "status-fail"
                 c5.markdown(f"""
-                    <div style="font-size: 0.8rem; color: {status_color};">{round(m['actual_2026']/m['target_2026']*100, 1) if m['target_2026']>0 else 0}%</div>
+                    <div style="font-size: 0.85rem; color: {status_color}; font-weight: bold;">{round(m['actual_2026']/m['target_2026']*100, 1) if m['target_2026']>0 else 0}%</div>
                     <div class="progress-container"><div class="progress-bar-fill {color_class}" style="width: {ratio*100}%;"></div></div>
                     """, unsafe_allow_html=True)
 
@@ -230,7 +213,7 @@ elif nav == "📂 Hành trình Data":
     st.title("📂 Hành trình Khách hàng")
     c1, c2, c3 = st.columns(3)
     search = c1.text_input("🔍 Tìm Tên/Email")
-    grp = c2.selectbox("📌 Nhóm Form", ["All", "Event", "Ebook", "Tiềm năng"])
+    grp = c2.selectbox("📌 Nhóm Form", ["All", "Event", "Ebook"])
     sts = c3.selectbox("🚦 Trạng thái", ["All", "Mới", "Cũ"])
     
     df_table = df_main.copy()

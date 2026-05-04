@@ -6,53 +6,16 @@ from google.oauth2.service_account import Credentials
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 from sklearn.linear_model import LinearRegression
 import plotly.express as px
-import plotly.graph_objects as go
 import datetime
 import io
 import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. CẤU HÌNH TRANG & CSS TÙY CHỈNH (VMP STYLE)
+# 1. CẤU HÌNH TRANG & KẾT NỐI DỮ LIỆU
 # ==========================================
 st.set_page_config(page_title="VMP Digital Strategy Dashboard", page_icon="📈", layout="wide")
 
-st.markdown("""
-    <style>
-    /* Bo góc và bóng đổ cho các ô Metric */
-    [data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        padding: 15px 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    /* Chỉnh màu tiêu đề Sidebar */
-    .css-17l2puu {
-        font-weight: 700;
-        color: #1e293b;
-    }
-    /* Làm đẹp các Tab */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 45px;
-        white-space: pre-wrap;
-        background-color: #f8fafc;
-        border-radius: 8px 8px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #38bdf8 !important;
-        color: white !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- GIỮ NGUYÊN CÁC HÀM GET_SS_CLIENT, LOAD_DATA, CALCULATE_GOALS TỪ CODE TRƯỚC ---
 def get_ss_client():
     scope = ['https://www.googleapis.com/auth/spreadsheets']
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
@@ -65,6 +28,7 @@ def load_data():
     sh = gc.open_by_url(url)
     data = sh.worksheet("Dữ liệu data mềm").get_all_values()
     df = pd.DataFrame(data[1:], columns=data[0])
+    
     df['Day submit'] = pd.to_datetime(df['Day submit'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['Day submit']).sort_values('Day submit')
     df['Touchpoints'] = df.groupby('Email')['Email'].transform('count')
@@ -79,22 +43,28 @@ def load_data():
 def calculate_goals(df):
     groups = ['Tổng hợp', 'Event', 'Ebook']
     goals_data = {}
+    
     for group in groups:
         df_g = df.copy() if group == 'Tổng hợp' else df[df['Nhóm Form'].str.contains(group, case=False, na=False)]
+        
         actual_2025 = df_g[df_g['Year'] == 2025].groupby('Month').size().reindex(range(1, 13), fill_value=0).values
         actual_2026 = df_g[df_g['Year'] == 2026].groupby('Month').size().reindex(range(1, 13), fill_value=0).values
+        
         y = actual_2025.astype(float)
         if np.sum(y) < 5:
             y = np.array([max(10.0, float(v)) for v in actual_2026])
             if np.sum(y) == 0: y = np.array([10.0] * 12)
+            
         ma_pred = np.array([np.mean(y[max(0, i-3):i]) if i > 0 else y[0] for i in range(1, 13)])
         mad_ma = np.mean(np.abs(ma_pred - y))
+        
         try:
             model_es = SimpleExpSmoothing(y, initialization_method="estimated").fit(smoothing_level=0.3, optimized=False)
             es_pred = model_es.fittedvalues
             mad_es = np.mean(np.abs(es_pred - y))
         except:
             es_pred, mad_es = ma_pred, 9999
+            
         try:
             X = np.arange(12).reshape(-1, 1)
             model_lr = LinearRegression().fit(X, y)
@@ -102,152 +72,182 @@ def calculate_goals(df):
             mad_lr = np.mean(np.abs(lr_pred - y))
         except:
             lr_pred, mad_lr = ma_pred, 9999
-        models = [{'name': 'Trung bình động (MA)', 'pred': ma_pred, 'mad': mad_ma},
-                  {'name': 'San bằng hàm mũ (ES)', 'pred': es_pred, 'mad': mad_es},
-                  {'name': 'Hồi quy tuyến tính (LR)', 'pred': lr_pred, 'mad': mad_lr}]
+            
+        models = [
+            {'name': 'Trung bình động (MA)', 'pred': ma_pred, 'mad': mad_ma},
+            {'name': 'San bằng hàm mũ (ES)', 'pred': es_pred, 'mad': mad_es},
+            {'name': 'Hồi quy tuyến tính (LR)', 'pred': lr_pred, 'mad': mad_lr}
+        ]
         best = min(models, key=lambda x: x['mad'])
         target_2026 = [int(max(p * 1.1, a * 1.15, 10)) for p, a in zip(best['pred'], y)]
+        
         weekly_actual = {m: {w: 0 for w in range(1, 5)} for m in range(1, 13)}
         df_2026 = df_g[df_g['Year'] == 2026]
         for m in range(1, 13):
             month_data = df_2026[df_2026['Month'] == m].groupby('Week_in_Month').size().to_dict()
             for w, val in month_data.items():
                 weekly_actual[m][w] = val
-        goals_data[group] = {'method': best['name'], 'mad': round(best['mad'], 2),
-                             'monthly': [{'month': m, 'actual_2025': int(y[m-1]), 'target_2026': target_2026[m-1], 'actual_2026': int(actual_2026[m-1])} for m in range(1, 13)],
-                             'weekly_actual': weekly_actual}
+                
+        goals_data[group] = {
+            'method': best['name'], 'mad': round(best['mad'], 2),
+            'monthly': [{'month': m, 'actual_2025': int(y[m-1]), 'target_2026': target_2026[m-1], 'actual_2026': int(actual_2026[m-1])} for m in range(1, 13)],
+            'weekly_actual': weekly_actual
+        }
     return goals_data
+
+def get_growth_str(curr, prev):
+    if prev == 0: return f"▲ 100%" if curr > 0 else "- Không đổi"
+    pct = ((curr - prev) / prev) * 100
+    if pct > 0: return f"▲ {round(pct)}% vs kỳ trước"
+    elif pct < 0: return f"▼ {abs(round(pct))}% vs kỳ trước"
+    return "- Không đổi"
 
 try:
     df_main = load_data()
     goals = calculate_goals(df_main)
 except Exception as e:
-    st.error(f"Lỗi: {e}")
+    st.error(f"Lỗi kết nối dữ liệu: {e}")
     st.stop()
 
 # ==========================================
-# 2. SIDEBAR - ĐƯA LOGO VÀ BỘ LỌC VÀO GỌN GÀNG
+# 2. MENU & BỘ LỌC CHUNG
 # ==========================================
-with st.sidebar:
-    st.title("🚀 VMP DIGITAL")
-    st.markdown("---")
-    nav = st.radio("Chuyên mục Dashboard", ["📊 Tổng quan Overview", "🎯 Theo dõi Mục tiêu", "📂 Tra cứu Data"])
-    st.markdown("---")
-    
-    st.subheader("🗓️ Bộ lọc thời gian")
-    start_date = st.date_input("Từ ngày", df_main['Day submit'].min())
-    end_date = st.date_input("Đến ngày", df_main['Day submit'].max())
-    
-    st.markdown("---")
-    st.caption("© 2026 VMP Academy Academy")
+st.sidebar.title("VMP Digital")
+st.sidebar.caption("B2B Strategy Dashboard")
 
-# Xử lý Logic Data (Giữ nguyên)
-start_dt, end_dt = pd.to_datetime(start_date), pd.to_datetime(end_date)
+nav = st.sidebar.radio("Điều hướng", ["📊 Tổng quan Overview", "🎯 Thiết lập Mục tiêu", "📂 Hành trình Data"])
+st.sidebar.markdown("---")
+
+st.sidebar.header("Lọc dữ liệu (Tổng quan)")
+min_date, max_date = df_main['Day submit'].min(), df_main['Day submit'].max()
+start_date = st.sidebar.date_input("Từ ngày", min_date)
+end_date = st.sidebar.date_input("Đến ngày", max_date)
+
+start_dt = pd.to_datetime(start_date)
+end_dt = pd.to_datetime(end_date)
 df = df_main[(df_main['Day submit'] >= start_dt) & (df_main['Day submit'] <= end_dt)]
+
 diff_days = (end_dt - start_dt).days + 1
 prev_end = start_dt - pd.Timedelta(days=1)
 prev_start = prev_end - pd.Timedelta(days=diff_days - 1)
 df_prev = df_main[(df_main['Day submit'] >= prev_start) & (df_main['Day submit'] <= prev_end)]
 
-def get_growth_str(curr, prev):
-    if prev == 0: return "100%"
-    pct = ((curr - prev) / prev) * 100
-    return f"{round(pct)}%"
+# Xuất Excel
+buffer = io.BytesIO()
+with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    df.to_excel(writer, index=False, sheet_name='Data')
+st.sidebar.download_button(label="⬇ Xuất Excel Data Lọc", data=buffer, file_name="VMP_Data.xlsx", mime="application/vnd.ms-excel")
 
 # ==========================================
 # 3. GIAO DIỆN CHÍNH
 # ==========================================
 if nav == "📊 Tổng quan Overview":
-    st.header("📊 Hệ thống Theo dõi Chiến dịch Digital")
+    st.title("📊 Tổng quan Overview")
     
-    # Khu vực Metrics xịn sò
-    m1, m2, m3, m4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     curr_total, prev_total = len(df), len(df_prev)
-    curr_new = len(df[df['Status'] == 'Mới'])
+    curr_ebook = len(df[df['Nhóm Form'].str.contains('Ebook', na=False, case=False)])
+    prev_ebook = len(df_prev[df_prev['Nhóm Form'].str.contains('Ebook', na=False, case=False)])
+    curr_event = len(df[df['Nhóm Form'].str.contains('Event', na=False, case=False)])
+    prev_event = len(df_prev[df_prev['Nhóm Form'].str.contains('Event', na=False, case=False)])
     
-    m1.metric("Tổng SL Data", f"{curr_total:,}", get_growth_str(curr_total, prev_total))
-    m2.metric("Data Mới", f"{curr_new:,}", delta_color="normal")
-    m3.metric("Data Event", len(df[df['Nhóm Form'].str.contains('Event', na=False, case=False)]))
-    m4.metric("Data Ebook", len(df[df['Nhóm Form'].str.contains('Ebook', na=False, case=False)]))
-
-    st.markdown("### 📈 Phân tích Xu hướng")
+    c1.metric("Tổng SL Data", curr_total, get_growth_str(curr_total, prev_total))
+    c2.metric("Data Ebook", curr_ebook, get_growth_str(curr_ebook, prev_ebook))
+    c3.metric("Data Event", curr_event, get_growth_str(curr_event, prev_event))
+    
+    st.markdown("### Biểu đồ Xu hướng")
     df_trend = df.copy()
     df_trend['Ngày'] = df_trend['Day submit'].dt.date
     trend_data = df_trend.groupby(['Ngày', 'Nhóm Form']).size().reset_index(name='Số lượng')
-    
-    # Biểu đồ Plotly với Style sạch sẽ
-    fig = px.area(trend_data, x='Ngày', y='Số lượng', color='Nhóm Form', 
-                  color_discrete_sequence=['#38bdf8', '#fbbf24', '#94a3b8'],
-                  template="plotly_white")
-    fig.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400)
+    fig = px.line(trend_data, x='Ngày', y='Số lượng', color='Nhóm Form', markers=True, color_discrete_sequence=['#38bdf8', '#fbbf24', '#94a3b8'])
     st.plotly_chart(fig, use_container_width=True)
-
-    # Insight Cards
-    st.markdown("### 🤖 Trợ lý AI Phân tích Insight")
-    c1, c2 = st.columns(2)
+    
+    st.markdown("### 🤖 Insight Tổng quan")
+    ic1, ic2 = st.columns(2)
     top_event = df[df['Nhóm Form'].str.contains('Event', na=False, case=False)]['Tên Form'].value_counts()
+    top_ebook = df[df['Nhóm Form'].str.contains('Ebook', na=False, case=False)]['Tên Form'].value_counts()
     
-    with c1:
-        st.markdown(f"""
-        <div style="background-color: #f0f9ff; padding: 20px; border-radius: 10px; border-left: 5px solid #0ea5e9;">
-            <h4 style="margin-top:0;">🌟 Insight Event nổi bật</h4>
-            <p>Nguồn mang lại hiệu quả cao nhất là <b>{top_event.index[0] if not top_event.empty else 'N/A'}</b>.</p>
-            <p>Đề xuất: Tăng ngân sách Ads cho nguồn này vào khung giờ 19h-21h.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with c2:
-        st.markdown(f"""
-        <div style="background-color: #fffbeb; padding: 20px; border-radius: 10px; border-left: 5px solid #f59e0b;">
-            <h4 style="margin-top:0;">📌 Lưu ý Hành trình Khách hàng</h4>
-            <p>Tỷ lệ khách hàng cũ quay lại đăng ký thêm form mới đạt <b>{round((1-curr_new/max(curr_total,1))*100)}%</b>.</p>
-            <p>Cần kịch bản Re-marketing riêng cho nhóm này.</p>
-        </div>
-        """, unsafe_allow_html=True)
+    with ic1:
+        st.info(f"**INSIGHT EVENT** (Tỷ trọng: {round(curr_event/max(curr_total,1)*100)}%)\n\n"
+                f"Nguồn tốt nhất: **{top_event.index[0] if not top_event.empty else 'Chưa có'}** ({top_event.values[0] if not top_event.empty else 0} Data)")
+    with ic2:
+        st.warning(f"**INSIGHT EBOOK** (Tỷ trọng: {round(curr_ebook/max(curr_total,1)*100)}%)\n\n"
+                   f"Nguồn tốt nhất: **{top_ebook.index[0] if not top_ebook.empty else 'Chưa có'}** ({top_ebook.values[0] if not top_ebook.empty else 0} Data)")
 
-elif nav == "🎯 Theo dõi Mục tiêu":
-    st.header("🎯 Mục tiêu KPI 2026")
-    t1, t2, t3 = st.tabs(["📌 Tổng hợp", "🏟️ Event", "📚 Ebook"])
+elif nav == "🎯 Thiết lập Mục tiêu":
+    st.title("🎯 Thiết lập & Theo dõi Mục tiêu 2026")
     
+    tabs = st.tabs(['📌 Mục tiêu Chung', '📊 Mục tiêu Event', '📘 Mục tiêu Ebook'])
     group_map = {0: 'Tổng hợp', 1: 'Event', 2: 'Ebook'}
-    for i, tab in enumerate([t1, t2, t3]):
+    
+    for i, tab in enumerate(tabs):
         with tab:
-            gn = group_map[i]
-            gd = goals[gn]
+            g_name = group_map[i]
+            g_data = goals[g_name]
+            st.caption(f"💡 Phương pháp dự báo: **{g_data['method']}** (MAD: {g_data['mad']})")
             
-            # Progress Bar lớn
-            target_year = sum([m['target_2026'] for m in gd['monthly']])
-            actual_year = sum([m['actual_2026'] for m in gd['monthly']])
-            progress = min(actual_year / max(target_year, 1), 1.0)
+            st.subheader("Bảng 1: Mục tiêu theo Tháng")
+            df_monthly = pd.DataFrame(g_data['monthly'])
+            df_monthly['Tiến độ'] = (df_monthly['actual_2026'] / df_monthly['target_2026'].replace(0, 1) * 100).round(1).astype(str) + "%"
+            df_monthly.columns = ['Tháng', 'Thực đạt 2025', 'Mục tiêu 2026', 'Thực đạt 2026', 'Tiến độ (%)']
+            st.dataframe(df_monthly, use_container_width=True)
             
-            col_p1, col_p2 = st.columns([3, 1])
-            col_p1.write(f"**Tiến độ năm 2026:** {actual_year}/{target_year} Data")
-            col_p1.progress(progress)
-            col_p2.metric("Tỉ lệ hoàn thành", f"{round(progress*100, 1)}%")
+            st.subheader("Bảng 2: Theo dõi Tiến độ")
+            view_level = st.radio("Cấp độ xem", ["Theo Quý", "Theo Tháng"], horizontal=True, key=f"view_{i}")
+            
+            if view_level == "Theo Quý":
+                q = st.selectbox("Chọn Quý", [1, 2, 3, 4], key=f"q_{i}")
+                months = [q*3-2, q*3-1, q*3]
+                t_target = sum([g_data['monthly'][m-1]['target_2026'] for m in months])
+                t_actual = sum([g_data['monthly'][m-1]['actual_2026'] for m in months])
+                
+                st.markdown(f"**TỔNG QUAN QUÝ {q}/2026** - Mục tiêu: **{t_target}** | Đạt: **{t_actual}**")
+                
+                track_data = []
+                for m in months:
+                    tgt = g_data['monthly'][m-1]['target_2026']
+                    act = g_data['monthly'][m-1]['actual_2026']
+                    track_data.append({"Thời gian": f"Tháng {m}", "Mục tiêu": tgt, "Thực đạt": act, "Tiến độ (%)": round(act/max(tgt,1)*100, 1)})
+                st.table(track_data)
+                
+            else:
+                m = st.selectbox("Chọn Tháng", list(range(1, 13)), key=f"m_{i}")
+                tgt = g_data['monthly'][m-1]['target_2026']
+                act = g_data['monthly'][m-1]['actual_2026']
+                st.markdown(f"**TỔNG THÁNG {m}/2026** - Mục tiêu: **{tgt}** | Đạt: **{act}**")
+                
+                w_target = int(np.ceil(tgt / 4))
+                w_data = []
+                for w in range(1, 5):
+                    w_act = g_data['weekly_actual'][m].get(w, 0)
+                    w_data.append({"Thời gian": f"Tuần {w}", "Mục tiêu": w_target, "Thực đạt": w_act, "Tiến độ (%)": round(w_act/max(w_target,1)*100, 1)})
+                st.table(w_data)
 
-            st.markdown("#### Chi tiết theo từng Tháng")
-            df_m = pd.DataFrame(gd['monthly'])
-            # Tạo bảng hiển thị đẹp
-            fig_table = go.Figure(data=[go.Table(
-                header=dict(values=['Tháng', 'Target 2026', 'Actual 2026', 'Tiến độ'],
-                            fill_color='#38bdf8', align='left', font=dict(color='white', size=14)),
-                cells=dict(values=[df_m['month'], df_m['target_2026'], df_m['actual_2026'], 
-                                   (df_m['actual_2026']/df_m['target_2026'].replace(0,1)*100).round(1).astype(str) + '%'],
-                           fill_color='#f8fafc', align='left'))])
-            fig_table.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300)
-            st.plotly_chart(fig_table, use_container_width=True)
+            st.markdown("### 🤖 Phân tích AI & Ghi chú của Planner")
+            a1, a2 = st.columns(2)
+            with a1:
+                # Logic text AI đơn giản hóa tương đương bản JS
+                st.success(f"✅ Đã thu về {t_actual if view_level=='Theo Quý' else act} Data.")
+                st.warning(f"⚠️ Cần thu thập thêm để đạt mốc {t_target if view_level=='Theo Quý' else tgt}.")
+                st.info("⚙️ Hành động: Theo dõi Real-time, đẩy mạnh Paid Ads Facebook/LinkedIn, A/B Testing.")
+            with a2:
+                st.text_area("📝 Đánh giá & Ghi chú thực tế nội bộ", height=150, key=f"note_{i}", placeholder="Nhập kế hoạch hành động vào đây...")
 
-elif nav == "📂 Tra cứu Data":
-    st.header("📂 Hệ thống Quản trị Dữ liệu")
+elif nav == "📂 Hành trình Data":
+    st.title("📂 Hành trình Khách hàng")
     
-    # Bộ lọc nhanh trong trang
-    f1, f2 = st.columns([2, 1])
-    search = f1.text_input("🔍 Tìm kiếm theo tên hoặc email...")
-    export_btn = f2.button("🚀 Chuẩn bị file Excel")
+    col1, col2, col3 = st.columns(3)
+    search = col1.text_input("🔍 Tìm Tên/Email")
+    grp = col2.selectbox("📌 Nhóm Form", ["All", "Event", "Ebook", "Tiềm năng"])
+    sts = col3.selectbox("🚦 Trạng thái", ["All", "Mới", "Cũ"])
     
-    df_view = df_main.copy()
+    df_table = df_main.copy()
     if search:
-        df_view = df_view[df_view['Họ tên'].str.contains(search, case=False) | df_view['Email'].str.contains(search, case=False)]
-    
-    st.dataframe(df_view[['Day submit', 'Họ tên', 'Email', 'Nhóm Form', 'Status', 'Touchpoints']].sort_values('Day submit', ascending=False), 
-                 use_container_width=True, height=500)
+        df_table = df_table[df_table['Họ tên'].str.contains(search, case=False, na=False) | df_table['Email'].str.contains(search, case=False, na=False)]
+    if grp != "All":
+        df_table = df_table[df_table['Nhóm Form'].str.contains(grp, case=False, na=False)]
+    if sts != "All":
+        df_table = df_table[df_table['Status'] == sts]
+        
+    df_table['Day submit'] = df_table['Day submit'].dt.strftime('%d/%m/%Y')
+    st.dataframe(df_table[['Day submit', 'Họ tên', 'Email', 'Nhóm Form', 'Status', 'Touchpoints']], use_container_width=True, height=600)
